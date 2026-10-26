@@ -381,6 +381,28 @@ describe('conversão guiada por etapas', () => {
     expect(Papa.parse(await downloaded[0].text()).data[1].slice(0, 4)).toEqual(['Café', 'R$ 13,995', 'R$ 20,9990', '000123']);
   });
 
+  it('monta o preço para com club e, se estiver vazio ou zero, com loja', async () => {
+    render(<App />);
+    uploadFile('Descrição;DE;club;LOJA\nArroz;4,49;3,99;0\nFeijão;7,99;;5,69');
+    await screen.findByRole('heading', { name: 'Configure sua arte' });
+    fireEvent.change(screen.getByLabelText('Coluna com os preços'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Nome de saída (2)'), { target: { value: 'DE' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar campo' }));
+    fireEvent.change(screen.getByLabelText('Nome de saída (3)'), { target: { value: 'PARA' } });
+    fireEvent.change(screen.getByLabelText('Formato (3)'), { target: { value: 'price' } });
+    fireEvent.change(screen.getByLabelText('Se estiver vazio, usar (3)'), { target: { value: '3' } });
+    expect(screen.getByText('club ou LOJA')).toBeTruthy();
+    expect(screen.getByText(/Vazio ou 0 na primeira coluna usa a segunda/)).toBeTruthy();
+    expect(screen.getByText(/3,99 · club/)).toBeTruthy();
+    preview();
+    expect(visiblePreview().getByText('3,99')).toBeTruthy();
+    expect(visiblePreview().getByText('5,69')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Baixar CSV (.csv)' }));
+    await screen.findByRole('status');
+    const rows = Papa.parse(await downloaded[0].text()).data;
+    expect(rows[1].slice(0, 6)).toEqual(['Arroz', '4,49', '3,99', 'Feijão', '7,99', '5,69']);
+  });
+
   it('trocar de aba redefine os campos para a origem nova sem exportar colunas antigas', async () => {
     const workbook = new ExcelJS.Workbook();
     workbook.addWorksheet('Produtos').addRows([['Categoria', 'Produto', 'Oferta'], ['Mercearia', 'Arroz', '13,99']]);

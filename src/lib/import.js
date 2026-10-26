@@ -37,10 +37,14 @@ export function readCell(value) {
 export function prepareSheet(rawRows, name) {
   const nonEmpty = rawRows.filter((row) => row.cells.some((cell) => !isBlank(cell)));
   if (!nonEmpty.length) throw new Error('A aba está vazia. Escolha uma aba com cabeçalhos e produtos.');
-  // Look beyond introductory title/blank rows, preferring a known pair of headers.
+  // Titles often repeat one phrase across the row. The real header may name the
+  // price LOJA, CLUB or NOVO instead of Oferta, so a product name plus distinct labels is enough.
   const known = nonEmpty.find((row) => {
     const detected = detectColumns(row.cells.map((cell) => ({ label: cell.value })));
-    return detected.product !== '' && detected.price !== '';
+    if (detected.product !== '' && detected.price !== '') return true;
+    if (detected.product === '') return false;
+    const labels = row.cells.filter((cell) => !isBlank(cell) && !cell.issue && typeof cell.value === 'string' && normalizePrice(cell.value).status !== 'valid');
+    return new Set(labels.map((cell) => normalizeHeader(cell.value))).size >= 2;
   });
   const header = known || nonEmpty[0];
   const populated = header.cells.filter((cell) => !isBlank(cell));
@@ -55,7 +59,7 @@ export function prepareSheet(rawRows, name) {
   }));
   const rows = nonEmpty.filter((row) => row.line > header.line);
   const warnings = rows.flatMap((row) => row.cells.flatMap((cell, index) => cell.issue
-    ? [{ line: row.line, message: `${columns[index]?.label || `Coluna ${index + 1}`}: ${cell.issue}` }] : []));
+    ? [{ line: row.line, column: index, message: `${columns[index]?.label || `Coluna ${index + 1}`}: ${cell.issue}` }] : []));
   return { name, columns, rows, warnings, headerLine: header.line };
 }
 

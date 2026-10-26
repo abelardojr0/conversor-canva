@@ -115,6 +115,69 @@ test('detecta cabeçalho depois de título e aceita mapeamento manual', () => {
   assert.equal(collectProducts(manual, '0', '1').products[0].price, '13,99');
 });
 
+test('encontra Descrição mesmo sem coluna chamada Oferta e ignora título repetido', () => {
+  const title = Array(6).fill('fds 02 a 04/10').join(';');
+  const sheet = importCsv(`${title}\n;Descrição;Custo;NOVO;LOJA;% loja\n;Arroz;3,80;3,80;4,49;10%`);
+  assert.equal(sheet.headerLine, 2);
+  assert.equal(sheet.columns[1].label, 'Descrição');
+  assert.equal(sheet.columns[4].label, 'LOJA');
+  assert.equal(createDefaultFields(sheet.columns)[0].column, '1');
+  assert.equal(createDefaultFields(sheet.columns)[1].column, '');
+});
+
+test('ignora cabeçalho repetido e faixa de seção sem bloquear os produtos', () => {
+  const sheet = importCsv('Descrição;NOVO;LOJA\nArroz;3,80;0\nDescrição;NOVO;LOJA\nOFERTA LL;OFERTA LL;OFERTA LL\nFeijão;4,50;5,69');
+  const fields = [
+    { id: 'product', column: '0', name: 'PRODUTO', type: 'product' },
+    { id: 'price', column: '1', name: 'PREÇO', type: 'price' },
+  ];
+  const result = collectMappedProducts(sheet, fields);
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(result.products.map((product) => product.name), ['Arroz', 'Feijão']);
+  assert.deepEqual(result.products.map((product) => product.price), ['3,80', '4,50']);
+  assert.equal(result.warnings.length, 2);
+  assert.match(result.warnings[0].message, /ignorada/);
+  assert.equal(result.warnings[0].line, 3);
+  assert.equal(result.warnings[1].line, 4);
+});
+
+test('preço condicionado usa club e, sem valor ou com zero, usa loja', () => {
+  const sheet = importCsv('Descrição;DE;club;LOJA\nArroz;4,49;3,99;0\nFeijão;7,99;;5,69\nCafé;13,49;0;0\nAçúcar;3,49;2,99;4,99');
+  const fields = [
+    { id: 'product', column: '0', name: 'PRODUTO', type: 'product' },
+    { id: 'from', column: '1', name: 'DE', type: 'price' },
+    { id: 'to', column: '2', name: 'PARA', type: 'price', fallback: '3' },
+  ];
+  assert.equal(validateFields(fields, { columns: sheet.columns }).length, 0);
+  assert.match(validateFields([fields[0], { ...fields[2], fallback: '2' }], { columns: sheet.columns })[0].message, /segunda coluna diferente/);
+  assert.match(validateFields([fields[0], fields[1], { ...fields[2], fallback: '1' }], { columns: sheet.columns })[0].message, /já está sendo usada/);
+  const result = collectMappedProducts(sheet, fields);
+  assert.deepEqual(result.products.map((product) => product.values), [
+    ['Arroz', '4,49', '3,99'],
+    ['Feijão', '7,99', '5,69'],
+    ['Café', '13,49', ''],
+    ['Açúcar', '3,49', '2,99'],
+  ]);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].message, /Sem valor em club nem em LOJA/);
+  assert.match(result.warnings[0].message, /Foi usado club/);
+  assert.equal(collectProducts(importCsv('Produto;Oferta\nArroz;0'), '0', '1').products[0].price, '0,00');
+  const asText = collectMappedProducts(sheet, [fields[0], { ...fields[2], type: 'text' }]);
+  assert.deepEqual(asText.products.map((product) => product.values[1]), ['3,99', '5,69', '', '2,99']);
+  assert.equal(asText.errors.length, 0);
+  const excelNumbers = prepareSheet([
+    { line: 1, cells: [{ value: 'Descrição' }, { value: 'club' }, { value: 'LOJA' }] },
+    { line: 2, cells: [{ value: 'absorvente diana lv16 pg14' }, { value: 0 }, { value: 5.99 }] },
+    { line: 3, cells: [{ value: 'ARROZ BRANCO ARA 1KG' }, { value: 3.99 }, { value: 0 }] },
+  ], 'SEMANAL');
+  const para = { id: 'to', column: '1', name: 'PARA', type: 'text', fallback: '2' };
+  const numeric = collectMappedProducts(excelNumbers, [{ id: 'product', column: '0', name: 'PRODUTO', type: 'product' }, para]);
+  assert.deepEqual(numeric.products.map((product) => product.values[1]), ['5.99', '3.99']);
+  const priced = collectMappedProducts(excelNumbers, [{ id: 'product', column: '0', name: 'PRODUTO', type: 'product' }, { ...para, type: 'price' }]);
+  assert.deepEqual(priced.products.map((product) => product.values[1]), ['5,99', '3,99']);
+  assert.equal(priced.errors.length, 0);
+});
+
 test('rejeita planilha vazia, sem cabeçalho e CSV malformado', () => {
   assert.throws(() => importCsv(''), /vazia/);
   assert.throws(() => importCsv('Arroz;13,99\nFeijão;8,50'), /cabeçalho/);

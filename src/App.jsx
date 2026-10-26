@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, Check, CheckCircle2, CircleHelp, FileSpreadsheet, FileText, FileUp, Info, Layers, LoaderCircle, LockKeyhole, RefreshCw, ShieldCheck, Table2, TriangleAlert, X } from 'lucide-react';
-import { collectMappedProducts, transformProducts, MAX_BATCH_ROWS } from './lib/transform.js';
+import { collectMappedProducts, resolveFallback, transformProducts, MAX_BATCH_ROWS } from './lib/transform.js';
 import { importFile } from './lib/import.js';
 import { createDefaultFields, maxProductsPerPage, suggestFieldName, validateFields } from './lib/fields.js';
 import { downloadFile, exportCsv, exportXlsx } from './lib/export.js';
@@ -21,6 +21,24 @@ function columnExample(sheet, column, price, currency) {
     return normalized?.status === 'valid' ? normalized.value : String(cell.value);
   }
   return '';
+}
+
+function fieldExample(sheet, field, currency) {
+  if (!field.fallback) return columnExample(sheet, field.column, field.type === 'price', currency);
+  if (!sheet) return '';
+  for (const row of sheet.rows) {
+    const resolved = resolveFallback(row, field, sheet.columns, currency);
+    if (resolved.value) return `${resolved.value} · ${resolved.source}`;
+  }
+  return '';
+}
+
+function sourceTitle(sheet, field) {
+  const label = (index) => sheet?.columns.find((column) => String(column.index) === String(index))?.label;
+  const primary = label(field.column);
+  const secondary = field.fallback ? label(field.fallback) : '';
+  if (primary && secondary) return `${primary} ou ${secondary}`;
+  return primary || 'Selecione a coluna';
 }
 
 function headerSequence(prefix, count) {
@@ -60,11 +78,14 @@ export default function App() {
   const output = useMemo(() => amountValid && mapped ? transformProducts(products, amount, fields) : { headers: [], rows: [], batches: [] }, [products, amount, amountValid, fields, mapped]);
   const currentPage = Math.min(page, Math.max(0, output.rows.length - 1));
   const currentBatch = Math.min(batch, Math.max(0, output.batches.length - 1));
-  const issues = [...(sheet?.warnings || []), ...warnings, ...errors].filter((item, index, all) => all.findIndex((other) => other.line === item.line && other.message === item.message) === index);
+  const selectedColumns = new Set(fields.flatMap((field) => [field.column, field.fallback].filter((value) => value !== undefined && String(value) !== '').map(Number)));
+  const ignoredLines = new Set(warnings.filter((warning) => warning.message.includes('ignorada')).map((warning) => warning.line));
+  const visibleWarnings = (sheet?.warnings || []).filter((warning) => !ignoredLines.has(warning.line) && (warning.column === undefined || selectedColumns.has(warning.column)));
+  const issues = [...visibleWarnings, ...warnings, ...errors].filter((item, index, all) => all.findIndex((other) => other.line === item.line && other.message === item.message) === index);
   const ready = products.length > 0 && amountValid && mapped && errors.length === 0 && !loading && !sheet?.error;
   const canPreview = output.rows.length > 0 && mapped && !loading && !sheet?.error;
   const validProducts = products.filter((product) => product.validPrice).length;
-  const unusedColumns = sheet?.columns.filter((column) => !fields.some((field) => String(column.index) === String(field.column))) || [];
+  const unusedColumns = sheet?.columns.filter((column) => !fields.some((field) => String(field.column) === String(column.index) || String(field.fallback || '') === String(column.index))) || [];
 
   useEffect(() => {
     if (previousStep.current !== step) panelTitle.current?.focus();
@@ -183,7 +204,7 @@ export default function App() {
             <fieldset className="mapping-section" disabled={loading || !!exporting}><legend>2. Gerencie os campos de cada produto</legend><p className="section-description">Inclua colunas, escolha os nomes de saída e use as setas para definir a ordem.</p>
               {sheets.length > 1 && <div className="sheet-field"><label htmlFor="sheet">Aba da planilha</label><select id="sheet" value={sheetIndex} onChange={(event) => selectSheet(event.target.value)}>{sheets.map((item, index) => <option key={index} value={index}>{item.name}{item.error ? ' (verificar)' : ''}</option>)}</select></div>}
               {sheet?.error && <div className="alert alert-error" role="alert"><TriangleAlert size={19} /><span>{sheet.error}</span></div>}
-              <FieldManager fields={fields} columns={sheet?.columns || []} issues={fieldIssues} perPage={amountValid ? amount : 0} onChange={changeFields} onAdd={addField} getExample={(field) => columnExample(sheet, field.column, field.type === 'price', currency)} />
+              <FieldManager fields={fields} columns={sheet?.columns || []} issues={fieldIssues} perPage={amountValid ? amount : 0} onChange={changeFields} onAdd={addField} getExample={(field) => fieldExample(sheet, field, currency)} />
               {!amountValid && Number.isInteger(amount) && amount > maximum && <div className="field-limit-alert" role="alert"><p>{amount} produtos × {fields.length} campos ultrapassam as 150 colunas. Com esses campos, cabem até {maximum} produtos por página.</p><button className="text-button" onClick={() => changeAmount(String(maximum))}>Ajustar para {maximum} produtos <ArrowRight size={15} /></button></div>}
               {mapped && unusedColumns.length > 0 && <p className="unused-note"><Info size={15} /> Não serão exportadas: {unusedColumns.map((column) => column.label).join(', ')}.</p>}
               <button className="text-button mapping-details" type="button" onClick={() => setDrawer('fields')}>Entenda os nomes das colunas de saída <ArrowRight size={15} /></button>
@@ -210,8 +231,8 @@ export default function App() {
 
     {drawer && <Drawer title={drawer === 'help' ? 'Como funciona' : drawer === 'fields' ? 'Nomes das colunas de saída' : 'Pendências da planilha'} onClose={closeDrawer}>
       {drawer === 'help' && <><p className="drawer-lead">Da sua lista de produtos a um arquivo organizado, em três etapas.</p><ol className="help-steps"><li><span>01</span><div><h3>Envie sua planilha</h3><p>Use Excel (.xlsx) ou CSV. O arquivo precisa ter uma linha de cabeçalho, uma coluna de nomes e outra de preços.</p></div></li><li><span>02</span><div><h3>Configure sua arte</h3><p>Defina quantos produtos cabem por página. Adicione os campos desejados, escolha as colunas de origem e personalize seus nomes e ordem de saída.</p></div></li><li><span>03</span><div><h3>Confira e baixe</h3><p>Navegue até a última página para conferir os dados. Baixe o Excel ou CSV e importe no Canva, conectando os campos aos elementos do design.</p></div></li></ol><div className="drawer-note"><ShieldCheck size={21} /><div><h3>Precisão e privacidade</h3><p>Os preços não são arredondados. Seus arquivos permanecem no navegador e não são enviados a servidores.</p></div></div></>}
-      {drawer === 'fields' && <div className="output-mapping" role="region" aria-label="Como as colunas de saída serão nomeadas"><p className="drawer-lead">Escolha o nome de saída de cada campo. O conversor acrescenta a posição do produto automaticamente.</p><dl className="mapping-explanation">{fields.map((field) => <div key={field.id}><dt>{sheet?.columns.find((column) => String(column.index) === String(field.column))?.label || 'Selecione a coluna'}</dt><dd>{field.name.trim() ? headerSequence(field.name.trim(), amountValid ? amount : 1) : 'Informe um nome de saída'}</dd></div>)}</dl><h3>O número é a posição na arte</h3><p>Um campo chamado CATEGORIA gera CATEGORIA1 para o primeiro produto, CATEGORIA2 para o segundo, e assim por diante. A ordem dos campos se repete em cada produto.</p><h3>Uma linha, uma página</h3><p>O total de colunas é a quantidade de produtos por página multiplicada pelos campos selecionados. Com {fields.length} campos por produto, cabem até {maximum} produtos em uma página, respeitando as 150 colunas.</p><p className="drawer-note-text">O campo que identifica o nome do produto é obrigatório. Os demais podem ser removidos. Texto preserva códigos e descrições; Preço normaliza valores monetários sem arredondar.</p></div>}
-      {drawer === 'issues' && <><p className="drawer-lead">{errors.length ? 'Corrija os dados no arquivo original e envie novamente, ou ajuste as colunas selecionadas.' : 'Confira as linhas abaixo e o resultado na prévia.'}</p><div className="issue-count"><TriangleAlert size={18} />{errors.length} {errors.length === 1 ? 'problema impede' : 'problemas impedem'} o download · {issues.length} {issues.length === 1 ? 'aviso' : 'avisos'} no total</div><ol className="issue-list">{issues.map((issue, index) => <li key={index}><span>{issue.line ? `Linha ${issue.line}` : 'Configuração'}</span><p>{issue.message}</p></li>)}</ol></>}
+      {drawer === 'fields' && <div className="output-mapping" role="region" aria-label="Como as colunas de saída serão nomeadas"><p className="drawer-lead">Escolha o nome de saída de cada campo. O conversor acrescenta a posição do produto automaticamente.</p><dl className="mapping-explanation">{fields.map((field) => <div key={field.id}><dt>{sourceTitle(sheet, field)}</dt><dd>{field.name.trim() ? headerSequence(field.name.trim(), amountValid ? amount : 1) : 'Informe um nome de saída'}</dd></div>)}</dl><h3>O número é a posição na arte</h3><p>Um campo chamado CATEGORIA gera CATEGORIA1 para o primeiro produto, CATEGORIA2 para o segundo, e assim por diante. A ordem dos campos se repete em cada produto.</p><h3>Uma linha, uma página</h3><p>O total de colunas é a quantidade de produtos por página multiplicada pelos campos selecionados. Com {fields.length} campos por produto, cabem até {maximum} produtos em uma página, respeitando as 150 colunas.</p><p className="drawer-note-text">O campo que identifica o nome do produto é obrigatório. Os demais podem ser removidos. Texto preserva códigos e descrições; Preço normaliza valores monetários sem arredondar. Se um campo tiver segunda coluna, ela entra quando a primeira estiver vazia. Em preço, 0 também conta como vazio.</p></div>}
+      {drawer === 'issues' && <><p className="drawer-lead">{errors.length ? 'Corrija os dados no arquivo original e envie novamente, ou ajuste as colunas selecionadas.' : 'Confira as linhas abaixo e o resultado na prévia.'}</p><div className="issue-count"><TriangleAlert size={18} />{errors.length ? `${errors.length} ${errors.length === 1 ? 'problema impede' : 'problemas impedem'} o download · ${issues.length} ${issues.length === 1 ? 'aviso' : 'avisos'} no total` : `${issues.length} ${issues.length === 1 ? 'aviso' : 'avisos'}. O download continua disponível.`}</div><ol className="issue-list">{issues.map((issue, index) => <li key={index}><span>{issue.line ? `Linha ${issue.line}` : 'Configuração'}</span><p>{issue.message}</p></li>)}</ol></>}
     </Drawer>}
   </>;
 }

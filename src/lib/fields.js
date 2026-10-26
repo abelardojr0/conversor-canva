@@ -46,6 +46,17 @@ export function validateFields(fields, { columns, perPage } = {}) {
         add(field.id, 'Esta coluna já está sendo usada em outro campo.');
       }
       if (field.column !== '') sources.add(String(field.column));
+      if (field.fallback) {
+        if (field.type === 'product') add(field.id, 'O nome do produto usa uma única coluna.');
+        else if (String(field.fallback) === String(field.column)) add(field.id, 'Escolha uma segunda coluna diferente da primeira.');
+        else if (!columns.some((column) => String(column.index) === String(field.fallback))) add(field.id, 'Selecione uma segunda coluna da planilha.');
+        else if (sources.has(String(field.fallback))) add(field.id, 'Esta coluna já está sendo usada em outro campo.');
+        else sources.add(String(field.fallback));
+      }
+    } else if (field.fallback) {
+      if (String(field.fallback) === String(field.column)) add(field.id, 'Escolha uma segunda coluna diferente da primeira.');
+      else if (sources.has(String(field.fallback))) add(field.id, 'Esta coluna já está sendo usada em outro campo.');
+      if (field.fallback !== '') sources.add(String(field.fallback));
     }
   }
   if (!issues.length && Number.isInteger(perPage) && perPage >= 1 && perPage <= maxProductsPerPage(fields)) {
